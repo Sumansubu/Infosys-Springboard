@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT.parent / "Infosys-Springboard-submission.zip"
 
 EXCLUDED_DIRS = {
+    ".git",
     "venv",
     ".venv",
     "env",
