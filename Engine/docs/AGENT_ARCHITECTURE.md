@@ -2,6 +2,19 @@
 **Infosys Springboard — Vidzai Digital**  
 **Specialized Agent Roles, Communication Contracts & Orchestration**
 
+> **Milestone 3 update:** Research, Comparison, and Report agents are implemented in
+> `app/agents/research_agent/`, `app/agents/comparison_agent/`, and
+> `app/agents/report_agent/`. See `MILESTONE_2_4_AND_3_IMPLEMENTATION.md` and
+> `API_REFERENCE.md` for their contracts and invocation points.
+>
+> - **Research Agent** is invoked per user question, not on upload. It reads stored
+>   metrics plus per-document vector retrieval, decomposes multi-part questions, reuses
+>   session history for follow-ups, and returns citations, steps, and unavailable items.
+> - **Comparison Agent** is invoked only when the user compares documents.
+> - **Report Agent** is invoked only when a report is requested; M3 generates Executive
+>   Summary and Key Financials.
+> - **Evidence validation** now also verifies red-flag findings before persistence.
+
 ---
 
 ## 1. Multi-Agent System Overview

@@ -254,9 +254,14 @@ class MetricExtractor:
             matched_canonical = None
             matched_label = None
 
+            # A metric must begin the line (after table pipes, bullets, list
+            # numbering, or whitespace). This prevents sub-line items such as
+            # "Prepaid and Other Current Assets" from being treated as
+            # "Current Assets".
+            candidate = re.sub(r'^[\s|>*•\-]+', '', line_lower)
+            candidate = re.sub(r'^\d{1,2}[.)]\s+', '', candidate)
             for label, canonical in sorted(CANONICAL_METRIC_MAP.items(), key=lambda x: len(x[0]), reverse=True):
-                pattern = r'(?:^|[\s:;•\-])' + re.escape(label) + r'(?:[\s:;•\-]|$)'
-                if re.search(pattern, line_lower):
+                if candidate == label or candidate.startswith(label + " ") or candidate.startswith(label + ":"):
                     matched_canonical = canonical
                     matched_label = label
                     break
@@ -264,13 +269,13 @@ class MetricExtractor:
             if not matched_canonical:
                 continue
 
-            # Look for numbers on this line
-            numbers = re.findall(r'\(?\b\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?\)?', line)
+            # Look for numbers on this line, including negative/accounting values
+            numbers = re.findall(r'[\(\-]?\b\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?\)?', line)
             if not numbers:
                 continue
 
             val = FinancialNormalizer.parse_numeric_value(numbers[0])
-            if val is not None and val > 0:
+            if val is not None:
                 metrics.append(
                     ExtractedMetric(
                         name=matched_canonical,

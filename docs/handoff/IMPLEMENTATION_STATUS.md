@@ -1,5 +1,11 @@
 # IMPLEMENTATION STATUS & MILESTONE VERIFICATION
 
+> **Update (2026-11-21):** Milestone 2.4 and Milestone 3 are now implemented. The
+> authoritative, current status is `Engine/docs/IMPLEMENTATION_STATUS.md`; see also
+> `Engine/docs/MILESTONE_2_4_AND_3_IMPLEMENTATION.md`, `Engine/docs/API_REFERENCE.md`,
+> and `Engine/docs/VALIDATION_REPORT.md`. The matrix below is retained as the
+> November 12 baseline audit and its M3 rows are superseded.
+
 **Document Version:** 1.0.0  
 **Generated Date:** November 12, 2026  
 **Auditor:** Senior Software Architect  

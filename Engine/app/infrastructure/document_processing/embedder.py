@@ -5,10 +5,15 @@ Supports:
 - SentenceTransformers all-MiniLM-L6-v2 (384-dimensional dense vectors) as local offline fallback
 """
 
+import hashlib
+import importlib.util
 import logging
+import math
 import os
+import re
 import time
 from abc import ABC, abstractmethod
+from collections import Counter
 from typing import List, Optional
 
 import httpx
@@ -134,6 +139,49 @@ class OpenAIEmbeddingProvider(EmbeddingProviderInterface):
         return results
 
 
+class HashingEmbeddingProvider(EmbeddingProviderInterface):
+    """Deterministic, dependency-free local embedding provider.
+
+    Produces normalized 384-dimensional hashed bag-of-words vectors. It provides
+    reproducible semantic retrieval for offline development, CI, and air-gapped
+    installations where SentenceTransformers / PyTorch model weights are not
+    available. It is a lexical hashing model, not a replacement for a trained
+    neural embedder in production.
+    """
+
+    DIMENSION = 384
+
+    def __init__(self, dimension: int = DIMENSION):
+        self.dimension = dimension
+
+    def get_dimension(self) -> int:
+        return self.dimension
+
+    def get_model_name(self) -> str:
+        return "local-hashing-bow-v1"
+
+    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+
+        results: List[List[float]] = []
+        for text in texts:
+            tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+            counts = Counter(tokens)
+            vector = [0.0] * self.dimension
+            for token, count in counts.items():
+                digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+                index = int.from_bytes(digest[:4], "big") % self.dimension
+                sign = 1.0 if digest[4] & 1 else -1.0
+                vector[index] += sign * (1.0 + math.log(count))
+
+            norm = math.sqrt(sum(v * v for v in vector))
+            if norm > 0:
+                vector = [v / norm for v in vector]
+            results.append(vector)
+        return results
+
+
 class SentenceTransformerEmbeddingProvider(EmbeddingProviderInterface):
     """Local SentenceTransformers Provider (all-MiniLM-L6-v2, 384-dim)."""
 
@@ -190,15 +238,33 @@ def get_embedding_provider() -> EmbeddingProviderInterface:
                 model=getattr(settings, "embedding_model", "text-embedding-3-small"),
                 dimension=getattr(settings, "embedding_dimension", 1536),
             )
-        else:
-            logger.info(
-                "Active Embedding Provider: SentenceTransformers (all-MiniLM-L6-v2, 384-dim local)"
-            )
-            _active_embedding_provider = SentenceTransformerEmbeddingProvider(
-                model_name=getattr(
-                    settings, "embedding_model_name", "sentence-transformers/all-MiniLM-L6-v2"
+        elif prov_type in ("hashing", "hash", "deterministic"):
+            logger.info("Active Embedding Provider: local deterministic hashing (384-dim, offline)")
+            _active_embedding_provider = HashingEmbeddingProvider()
+        elif prov_type in ("sentence-transformers", "sentence_transformers", "local", "st"):
+            if importlib.util.find_spec("sentence_transformers") is None:
+                logger.warning(
+                    "EMBEDDING_PROVIDER=%s requested but sentence-transformers is not installed. "
+                    "Falling back to the dependency-free local hashing provider. Install "
+                    "sentence-transformers for neural local embeddings.",
+                    prov_type,
                 )
-            )
+                _active_embedding_provider = HashingEmbeddingProvider()
+            else:
+                logger.info(
+                    "Active Embedding Provider: SentenceTransformers (all-MiniLM-L6-v2, 384-dim local)"
+                )
+                _active_embedding_provider = SentenceTransformerEmbeddingProvider(
+                    model_name=getattr(
+                        settings, "embedding_model_name", "sentence-transformers/all-MiniLM-L6-v2"
+                    )
+                )
+        else:
+            # Default offline path: OpenAI was requested without a key, or an
+            # unknown provider name was supplied. Never require cloud credentials
+            # for deterministic local operation.
+            logger.info("Active Embedding Provider: local deterministic hashing (384-dim, offline)")
+            _active_embedding_provider = HashingEmbeddingProvider()
 
     return _active_embedding_provider
 

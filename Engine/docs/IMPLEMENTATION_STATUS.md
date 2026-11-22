@@ -1,123 +1,71 @@
-# Project Implementation & Verification Status
-## Multi-Agent Financial Research System
+# Implementation Status
 
-**Document Version:** 1.0.0  
-**Audit Date:** 2026-11-09  
+**Updated:** 2026-11-21  
+**Verified profile:** Python 3.13 venv, SQLite, local storage, ChromaDB, deterministic hashing embeddings, mock LLM.  
+**Cloud profile (OpenAI/Supabase/Qdrant):** implemented adapters, not verified in this environment.
 
----
+## Milestone 1 — Complete
 
-### Component Classification & Status
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Financial document structure study & architecture | Complete | `docs/FINANCIAL_DOCUMENT_STRUCTURE.md`, `SYSTEM_ARCHITECTURE.md` |
+| Multi-agent design and data models | Complete | `app/schemas/agents.py`, `app/infrastructure/database/models.py` |
+| Workspace and session management | Complete | `app/api/routes/workspaces.py`, repository + tests |
+| Document Agent ingestion | Complete | `app/agents/document_agent/service.py`, PyMuPDF parser, chunker, embedder |
+| Vector indexing | Complete | ChromaDB and Qdrant adapters; `test_vector_store.py` |
+| Seed documents | Complete | 5 PDFs in `seed_documents/` |
 
+## Milestone 2 — Complete
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| M2.1 Extraction Agent | Complete | `app/agents/extraction_agent/`, `test_extractor.py`, `test_calculations.py` |
+| M2.2 Red Flag Agent | Complete | `app/agents/red_flag_agent/`, `test_red_flag_rules.py`, `test_red_flag_analyzer.py` |
+| M2.3 Sequential orchestration | Complete | `app/orchestration/workflow.py` |
+| M2.4 Testing and validation | Complete | `tests/test_m24_validation.py`, `docs/VALIDATION_REPORT.md` |
+
+### M2.4 verification results
+
+- Seed validation: **102/102 test cases pass** across 5 documents.
+- Every persisted metric is re-checked against the cited PDF page: document exists,
+  citation document matches, page is in range, quote is verifiable, numeric value occurs
+  on the page.
+- Ratios are independently recomputed with `Decimal`.
+- Unsupported narrative red flags (including the mock LLM's page-197 finding) are rejected
+  and not persisted.
+- Pipeline failures (Document, Extraction, Red Flag) mark the processing job `FAILED`;
+  partial findings are discarded.
+
+## Milestone 3 — Implemented
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| M3.1 Research Agent | Complete | `app/agents/research_agent/service.py`, `tests/test_m3_agents.py` |
+| M3.2 Comparison Agent | Complete | `app/agents/comparison_agent/service.py`, `tests/test_m3_agents.py` |
+| M3.3 Conversational interface | Complete | `ConversationalResearch.jsx`, `/research/*` API |
+| M3.4 Report Agent (initial) | Complete for Executive Summary + Key Financials | `app/agents/report_agent/service.py`, `/reports/generate` |
+
+Research answers include exact document/page citations, step traces, and explicit
+unavailable-information lists. Session context is persisted in `ai_research_messages`.
+Comparison normalizes units, warns on currency/period mismatches, and marks missing data.
+Report sections are generated only from stored metrics and validated findings.
+
+## Milestone 4 — Remaining
+
+- Report: Red Flags, Company Comparison, Outlook sections.
+- PDF export of the compiled report.
+- Full end-to-end report completeness and citation audit.
+- Optional: OCR for scanned filings, SSE pipeline streaming, multi-tenant authorization,
+  report persistence, and optimized retrieval/prompting.
+
+## Test suite
+
+```bash
+cd Engine
+./venv/Scripts/python.exe run_tests.py          # Windows
+# or: python -m unittest discover tests -p "test_*.py" -v
+./venv/Scripts/python.exe scripts/validate_seed_documents.py
 ```
-[IMPLEMENTED IN CODE & READY FOR MANUAL VERIFICATION]
-  ├── Foundation & Core Architecture
-  ├── Storage Layer (Supabase Private Storage + Local Fallback)
-  ├── Database Layer (Supabase PostgreSQL + SQLite Fallback)
-  ├── Vector Database Layer (Qdrant Cloud + ChromaDB Fallback)
-  ├── LLM & Embedding Integrations (OpenAI gpt-4o + text-embedding-3-small)
-  ├── Milestone 1: Document Ingestion, PDF Layout Parsing, Chunking & Semantic Vector Search
-  ├── Milestone 2: Multi-Agent Orchestration (Document Agent -> Extraction Agent -> Evidence Validation -> Red Flag Agent)
-  └── Asynchronous Persistent Job Worker (worker.py with crash recovery)
 
-[CLEANLY DEFERRED (NO BROKEN MOCKS)]
-  ├── Milestone 3: Cross-Filing Peer Comparison Agent (Explicit "M3 Under Development" banner)
-  └── Milestone 4: Conversational Chat Agent & Formal PDF Report Generator (Deferred)
-```
-
----
-
-### Verification Matrix by Milestone
-
-#### 1. Foundation & Persistence
-* **PostgreSQL Engine:** Connected via SQLAlchemy 2.0 with connection pooling and psycopg3. Transactional schema migrated via Alembic (`001_initial_ai_service_tables`).
-* **Supabase Storage:** Uploads actual PDF binary streams to private `financial-documents` bucket. Secure backend streaming via `/documents/{id}/file`.
-* **Health Endpoint:** Real-time telemetry reporting live connectivity for database, storage, vector store, embedding dimensions, and job queue status.
-
-#### 2. Milestone 1: Document Processing & Vector Search
-* **PDF Ingestion:** PyMuPDF / PyMuPDF4LLM extraction with page-level layout awareness.
-* **Embeddings:** Native OpenAI `text-embedding-3-small` (1,536-dimensional) with strict dimension enforcement.
-* **Vector DB:** Qdrant collection with Cosine similarity distance and native pagination scroll.
-* **Retrieval Preview:** Live interactive semantic search UI executing queries against FastAPI `/search`.
-
-#### 3. Milestone 2: Multi-Agent Financial Research
-* **Extraction Agent:** Extracts GAAP line items (Revenue, Operating Profit, Net Income, Assets, Liabilities, Operating Cash Flow) and calculates financial ratios using Python `decimal.Decimal`.
-* **Evidence Validation:** Grounded citation verification ensuring citations reference the correct document ID, remain within filing page boundaries, and provide exact quote provenance.
-* **Red Flag Agent:** Hybrid risk analysis combining deterministic rule-based checks (Altman Z-Score distress, negative cash flow divergence, margin decay) and LLM-based narrative disclosure analysis.
-* **LangGraph Orchestrator:** Sequential state-machine workflow executing all 4 stages with execution step logging and persistent status tracking.
-* **Durable Worker:** Background worker (`worker.py`) polling `ai_processing_jobs` with automatic crash recovery.
-
----
-
-### Manual Verification Playbook (PowerShell)
-
-Execute all verification steps in order.
-
-#### Step 1: Run Automated Regression Test Suites
-```powershell
-# Navigate to backend directory and activate virtual environment
-cd C:\Users\adina\Desktop\Infosys\document-agent
-.\.venv\Scripts\Activate.ps1
-
-# 1. Run audit and regression test suite
-python -m unittest tests/test_audit_repairs.py -v
-
-# 2. Run LLM provider test suite
-python -m unittest tests/test_llm_provider.py -v
-
-# 3. Run multi-document isolation test suite
-python -m unittest tests/test_multi_document_isolation.py -v
-```
-* **Expected Output:** All tests report `OK`. No `RuntimeError` or dimension mismatches.
-
-#### Step 2: Start Backend Application
-```powershell
-cd C:\Users\adina\Desktop\Infosys\document-agent
-.\.venv\Scripts\Activate.ps1
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-* **Expected Output:**
-  ```
-  Starting Multi-Agent Financial Research System v0.1.0 in development mode...
-  Active vector store provider: QdrantVectorStore
-  Application startup complete. Uvicorn running on http://0.0.0.0:8000
-  ```
-
-#### Step 3: Start Multi-Agent Persistent Job Worker (Second Terminal)
-```powershell
-cd C:\Users\adina\Desktop\Infosys\document-agent
-.\.venv\Scripts\Activate.ps1
-python worker.py
-```
-* **Expected Output:**
-  ```
-  Multi-Agent Persistent Job Worker Online
-  Polling Database: SupabasePostgresRepository (or SQLiteRepository)
-  Waiting for queued financial document processing jobs...
-  ```
-
-#### Step 4: Start Frontend Application (Third Terminal)
-```powershell
-cd C:\Users\adina\Desktop\Finanical-Research
-npm run dev
-```
-* **Expected Output:**
-  ```
-  VITE v6.x.x ready in xxx ms
-  ➜  Local:   http://localhost:5173/
-  ```
-
-#### Step 5: End-to-End Functional Verification via Browser
-1. Open `http://localhost:5173` in Google Chrome or Edge.
-2. Verify top-right status indicator displays **"Live AI Backend Connected"**.
-3. Navigate to **Document Library** (`/documents`):
-   - Click **"Upload Document"** and select a financial PDF (e.g., Infosys or TCS annual report).
-   - Observe live upload progress and real-time chunk indexing telemetry.
-4. Navigate to **Semantic Search** (`/analysis` -> Vector DB & Search):
-   - Enter a query like *"What is the operating margin and revenue growth?"*.
-   - Verify live semantic chunk hits returned directly from Qdrant with authentic cosine similarity distances.
-5. Navigate to **Financial Extraction & Citations** (`/analysis` -> Extracted Financials):
-   - Click **"Run Analysis Pipeline"**.
-   - Observe the worker terminal claim and process the job through all 4 agent nodes.
-   - Verify extracted GAAP figures, calculated ratios, and click **"[P. X Citation]"** to view the provenance evidence modal.
-6. Navigate to **Forensic Red Flags** (`/analysis` -> Forensic Red Flags):
-   - Review rule-based and LLM disclosure findings with risk severity badges (`HIGH`, `MEDIUM`, `LOW`).
+The optional SentenceTransformers test is skipped when that extra is not installed; the
+deterministic hashing provider is tested in its place.

@@ -1,6 +1,6 @@
 # Multi-Agent Financial Research System
 **Infosys Springboard — Vidzai Digital**  
-**Milestone 1 & Milestone 2 Implementation: Complete Foundation, Document Intelligence, Financial Extraction, Red Flag Forensic Audits, and LangGraph Orchestration**
+**Milestones 1–3: Document Intelligence, Financial Extraction, Evidence-Validated Red Flags, Orchestration, Grounded Research, Company Comparison, and Initial Report Generation**
 
 ---
 
@@ -49,6 +49,9 @@ flowchart TD
         ExtAgent["Agent 2: Financial Extraction Agent<br/>(GAAP Mapping + Decimal Calculations)"]
         ValNode["Evidence Validation Node<br/>(Citation & Provenance Verification)"]
         RFAgent["Agent 3: Forensic Red Flag Agent<br/>(Deterministic Rules + Disclosure Audits)"]
+        ResearchAgent["Agent 4: Research Agent<br/>(Multi-step retrieval + citations)"]
+        CompareAgent["Agent 5: Comparison Agent<br/>(Unit-normalized peer benchmarking)"]
+        ReportAgent["Agent 6: Report Agent<br/>(Executive Summary + Key Financials)"]
     end
 
     subgraph Storage["Storage & Persistence Layer"]
@@ -96,16 +99,20 @@ flowchart TD
 ### Step 1: Backend Setup & Seed Ingestion
 Open **Terminal 1**:
 ```powershell
-# Navigate to backend directory
-cd c:\Users\adina\Desktop\Infosys\document-agent
+# From the repository root, navigate to the backend directory
+cd Engine
 
-# Activate Python virtual environment
+# Create and activate a Python virtual environment
+python -m venv venv
 .\venv\Scripts\Activate.ps1
 
 # Install / verify requirements
 pip install -r requirements.txt
 
-# Generate realistic multi-page financial seed PDFs (4 company filings)
+# Copy the environment template and adjust values as needed
+copy .env.example .env
+
+# Generate realistic financial seed PDFs (5 company filings)
 python scripts\create_seed_pdfs.py
 
 # Ingest and index seed filings into the Vector Database
@@ -118,7 +125,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ### Step 2 (Optional): Start the Durable Background Job Worker
 Open **Terminal 2**:
 ```powershell
-cd c:\Users\adina\Desktop\Infosys\document-agent
+cd Engine
 .\venv\Scripts\Activate.ps1
 
 # Start the persistent database-backed job worker
@@ -128,23 +135,34 @@ python worker.py
 ### Step 3: Start the React + Vite Frontend
 Open **Terminal 3**:
 ```powershell
-# Navigate to frontend directory
-cd c:\Users\adina\Desktop\Finanical-Research
+# Navigate to frontend directory (sibling of Engine)
+cd Frontend
+npm ci
 
 # Start the development server
 npm run dev
 ```
-Open your browser at `http://localhost:5173`.
+Open your browser at `http://localhost:5173`. The Vite dev server proxies `/api` to
+`http://localhost:8000`.
 
 ---
 
 ## 5. Automated Verification Test Suite
 
-Run all test suites across Milestones 1 and 2 in **Terminal 4**:
+Run the full suite across Milestones 1–3 in **Terminal 4**:
 ```powershell
-cd c:\Users\adina\Desktop\Infosys\document-agent
+cd Engine
 .\venv\Scripts\Activate.ps1
 
+# Complete suite (115 tests; uses an isolated temporary database and vector index)
+python run_tests.py
+
+# Milestone 2.4 seed validation across all 5 bundled filings
+python scripts\validate_seed_documents.py
+```
+
+To run individual modules:
+```powershell
 # 1. Document Agent, Parser, Chunker, Embedder, and Vector Store
 python -m unittest tests\test_document_agent.py tests\test_parser.py tests\test_chunker.py tests\test_embedder.py tests\test_vector_store.py
 
@@ -160,7 +178,10 @@ python -m unittest tests\test_red_flag_rules.py tests\test_red_flag_analyzer.py 
 # 5. Multi-Agent Orchestration & End-to-End Pipeline
 python -m unittest tests\test_orchestration.py tests\test_milestone2_e2e.py
 
-# 6. Multi-Document Data Isolation & Zero Cross-Contamination Acceptance Test
+# 6. Milestone 2.4 evidence validation and Milestone 3 agents
+python -m unittest tests\test_m24_validation.py tests\test_m3_agents.py tests\test_audit_repairs.py
+
+# 7. Multi-Document Data Isolation & Zero Cross-Contamination Acceptance Test
 python -m unittest tests\test_multi_document_isolation.py
 ```
 
@@ -168,7 +189,7 @@ python -m unittest tests\test_multi_document_isolation.py
 
 ## 6. Preloaded Financial Seed Documents
 
-The system pre-populates 4 authentic corporate financial filings:
+The system pre-populates 5 bundled corporate financial filings:
 1. **Zenith Energy Resources Corp.** (`zenith_energy_earnings_call_q4_fy25.pdf`):
    - Q4 FY25 Earnings Call Transcript.
    - Revenue: $8,420M, Operating Cash Flow: $2,650M, Capital Expenditure: $1,120M, Total Debt: $3,800M.
@@ -205,3 +226,62 @@ The system pre-populates 4 authentic corporate financial filings:
 | `GET` | `/workflows/{job_id}/status`| Query execution status of a background processing job |
 | `POST` | `/search` | Semantic cosine vector retrieval with page and table filters |
 | `DELETE`| `/documents/{id}` | Safely remove document file, vectors, and database records |
+| `POST` | `/research/sessions/{id}/query` | Grounded multi-part question with citations and session context |
+| `POST` | `/research/query` | Stateless grounded research query |
+| `GET` | `/research/sessions/{id}/messages` | Persisted research conversation turns |
+| `DELETE`| `/research/sessions/{id}/messages` | Clear research session context |
+| `POST` | `/comparison` | Side-by-side company metric comparison with unit/period warnings |
+| `POST` | `/reports/generate` | Generate Executive Summary and Key Financials sections |
+
+See `docs/API_REFERENCE.md` for request/response contracts.
+
+---
+
+## 8. Local Setup, Run, and Test
+
+### Backend (Windows)
+
+```powershell
+cd Engine
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+# optional offline profile: copy .env.example to .env and set
+# EMBEDDING_PROVIDER=hashing, VECTOR_STORE_TYPE=chroma, LLM_PROVIDER=mock, STORAGE_PROVIDER=local
+.\venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+`python -m venv` plus the core dependencies (FastAPI, PyMuPDF, ChromaDB, SQLAlchemy) is
+sufficient for the offline profile. `sentence-transformers`/`torch` are optional; when they
+are not installed the deterministic 384-d hashing embedder is used automatically.
+
+### Frontend
+
+```bash
+cd Frontend
+npm ci
+npm run dev
+```
+
+The Vite dev server proxies `/api` to `http://localhost:8000`.
+
+### Tests and seed validation
+
+```powershell
+cd Engine
+.\venv\Scripts\python.exe run_tests.py
+.\venv\Scripts\python.exe scripts/validate_seed_documents.py
+```
+
+The validation script writes `docs/VALIDATION_REPORT.md` and `docs/validation_report.json`.
+
+### Environment variables (new in M3)
+
+No new secret is required. Relevant settings:
+
+- `EMBEDDING_PROVIDER` — `hashing` (offline), `sentence-transformers`, or `openai`
+- `VECTOR_STORE_TYPE` — `chroma`, `qdrant`, or `auto`
+- `LLM_PROVIDER` — `mock` (offline), `openai`, or `gemini`
+- Existing database/storage variables are unchanged.
+
+Documentation: `docs/API_REFERENCE.md`, `docs/MILESTONE_2_4_AND_3_IMPLEMENTATION.md`,
+`docs/VALIDATION_REPORT.md`, `docs/IMPLEMENTATION_STATUS.md`.

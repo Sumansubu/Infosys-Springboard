@@ -35,7 +35,7 @@ import AgentPipelineTracker from "../components/AgentPipelineTracker";
 import CitationModal from "../components/CitationModal";
 import WorkspaceDirectory from "./WorkspaceDirectory";
 import SessionDetails from "./SessionDetails";
-import StubPage from "../components/StubPage";
+import ComparisonPanel from "../components/comparison/ComparisonPanel";
 import api from "../services/api";
 
 export default function ResearchWorkspace({
@@ -501,7 +501,7 @@ export default function ResearchWorkspace({
             <GitCompare size={14} />
             <span>Peer Comparison</span>
             <span className="fin-badge fin-badge-xs fin-badge-secondary ml-1 opacity-80 text-[10px]">
-              M3 Under Development
+              M3
             </span>
           </button>
         </div>
@@ -1104,35 +1104,9 @@ export default function ResearchWorkspace({
         </div>
       )}
 
-      {/* TAB CONTENT 5: COMPARISON AGENT (MILESTONE 3 — STUB) */}
+      {/* TAB CONTENT 5: COMPARISON AGENT (MILESTONE 3) */}
       {activeTab === "comparison" && (
-        <div className="tab-content animate-fadeIn">
-          <StubPage
-            milestone="Milestone 3"
-            title="Peer Comparison &amp; Cross-Company Benchmarking Agent"
-            agentName="Comparison Agent"
-            description="Automated cross-filing metric reconciliation, peer spread analytics, and competitor benchmarking are scheduled for delivery in Milestone 3."
-            plannedFeatures={[
-              {
-                title: "Cross-Entity Metric Alignment",
-                description: "Normalizes GAAP/IFRS reporting differences across peer companies into aligned analytical dimensions."
-              },
-              {
-                title: "Competitor Spread & Margin Variance",
-                description: "Calculates basis-point margin differentials, growth velocity, and capital efficiency spreads."
-              },
-              {
-                title: "Order Book & Deal TCV Benchmarking",
-                description: "Compares contract pipeline coverage and book-to-bill ratios across industry competitors."
-              },
-              {
-                title: "Automated Peer Variance Explanations",
-                description: "Synthesizes multi-company MD&A disclosures to explain macroeconomic vs company-specific performance divergences."
-              }
-            ]}
-            setPage={setPage}
-          />
-        </div>
+        <ComparisonPanel documents={documents} session={session} setPage={setPage} />
       )}
 
       {/* Global Citation Inspection Modal */}

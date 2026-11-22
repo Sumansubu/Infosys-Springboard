@@ -189,20 +189,21 @@ Finanical-Research/
 
 1. Clone or download the repository:
    ```bash
-   git clone https://github.com/bhavanidunna2011-hub/Finanical-Research.git
-   cd Finanical-Research
+   git clone https://github.com/Sumansubu/Infosys-Springboard.git
+   cd Infosys-Springboard/Frontend
    ```
 
 2. Install dependencies:
    ```bash
-   npm install
+   npm ci
    ```
 
 3. Start the local development server:
    ```bash
    npm run dev
    ```
-   The application will be available at `http://localhost:5174/` (or your assigned port).
+   The application will be available at `http://localhost:5173/`. Requests to `/api` are
+   proxied to the FastAPI backend at `http://localhost:8000`.
 
 4. Build for production:
    ```bash
@@ -229,6 +230,7 @@ FinResearch AI adheres to financial compliance and audit standards:
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+No license file is included in this repository; it is an Infosys Springboard project
+submission. See the repository owner before redistributing.
 
 *Disclaimer: FinResearch AI is an analytical research workspace designed for financial research and evaluation purposes. Information extracted by the system should be verified against official statutory regulatory filings before making investment or credit decisions.*

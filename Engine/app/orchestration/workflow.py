@@ -15,6 +15,11 @@ from app.agents.extraction_agent import ExtractionAgentService
 from app.agents.red_flag_agent import RedFlagAgentService
 from app.infrastructure.database import get_database_repository
 from app.infrastructure.storage import get_file_storage
+from app.orchestration.evidence import (
+    load_page_texts,
+    validate_metrics,
+    validate_red_flag_finding,
+)
 from app.orchestration.state import AgentExecutionLog, FinancialResearchState
 from app.schemas.agents import ExtractedFinancials
 
@@ -156,11 +161,16 @@ def extraction_agent_node(state: FinancialResearchState) -> FinancialResearchSta
                     "name": m.name,
                     "value": str(m.value),
                     "statement": "KEY_RATIOS" if m.is_calculated else "STATEMENT",
+                    "unit": m.unit,
+                    "currency": m.currency,
+                    "is_calculated": m.is_calculated,
+                    "formula": m.formula,
                     "citation": {
                         "document_id": m.citation.document_id,
                         "page_number": m.citation.page_number,
                         "exact_quote": m.citation.exact_quote,
                         "is_calculated": m.citation.is_calculated,
+                        "calculation_basis": m.citation.calculation_basis,
                     },
                 }
 
@@ -204,9 +214,77 @@ def extraction_agent_node(state: FinancialResearchState) -> FinancialResearchSta
     return state
 
 
+def _metric_rows_from_financials(model: ExtractedFinancials, allowed_names: set) -> List[Dict[str, Any]]:
+    """Convert validated ExtractedFinancials metrics back into repository rows."""
+    rows: List[Dict[str, Any]] = []
+    groups = [
+        (model.income_statement, "INCOME_STATEMENT"),
+        (model.balance_sheet, "BALANCE_SHEET"),
+        (model.cash_flow, "CASH_FLOW"),
+        (model.ratios, "KEY_RATIOS"),
+    ]
+    for group, statement_type in groups:
+        for name, metric in group.items():
+            if name not in allowed_names:
+                continue
+            rows.append({
+                "metric_name": metric.name,
+                "source_label": metric.raw_text,
+                "numeric_value": str(metric.value),
+                "currency": metric.currency,
+                "unit": metric.unit,
+                "period_type": metric.period.value,
+                "fiscal_year": metric.fiscal_year,
+                "statement_type": statement_type,
+                "is_calculated": metric.is_calculated,
+                "formula": metric.formula,
+                "is_consolidated": metric.is_consolidated,
+                "citation": {
+                    "document_id": metric.citation.document_id,
+                    "page_number": metric.citation.page_number,
+                    "exact_quote": metric.citation.exact_quote,
+                    "table_index": metric.citation.table_index,
+                },
+            })
+    return rows
+
+
+def _apply_validated_metrics(
+    state: FinancialResearchState,
+    repo: Any,
+    allowed_names: set,
+) -> None:
+    """Remove rejected metrics from state and replace the persisted metric set."""
+    metrics = (state.extracted_financials or {}).get("metrics", {})
+    state.extracted_financials["metrics"] = {
+        name: value for name, value in metrics.items() if name in allowed_names
+    }
+
+    model = (state.extracted_financials or {}).get("_model")
+    if isinstance(model, ExtractedFinancials):
+        filtered = model.model_copy(deep=True)
+        filtered.income_statement = {k: v for k, v in filtered.income_statement.items() if k in allowed_names}
+        filtered.balance_sheet = {k: v for k, v in filtered.balance_sheet.items() if k in allowed_names}
+        filtered.cash_flow = {k: v for k, v in filtered.cash_flow.items() if k in allowed_names}
+        filtered.ratios = {k: v for k, v in filtered.ratios.items() if k in allowed_names}
+        state.extracted_financials["_model"] = filtered
+        rows = _metric_rows_from_financials(filtered, allowed_names)
+        repo.store_financial_metrics(state.document_id, rows)
+
+    state.extracted_metrics_count = len(state.extracted_financials["metrics"])
+
+
 def evidence_validation_node(state: FinancialResearchState) -> FinancialResearchState:
-    """Step 3: Verification of extracted metrics and source citations."""
+    """Step 3: Verify every metric citation against the source document.
+
+    Rejects metrics whose document, page, verbatim quote, or numeric value cannot
+    be verified. Calculated ratios are accepted only when their calculation basis
+    is itself built from verified source metrics. The pipeline fails when no
+    metric can be grounded, rather than silently accepting unsupported claims.
+    """
     start_time = utc_now()
+    repo = get_database_repository()
+
     if state.is_failed or not state.extracted_financials:
         state.validation_passed = False
         return state
@@ -214,47 +292,65 @@ def evidence_validation_node(state: FinancialResearchState) -> FinancialResearch
     metrics = state.extracted_financials.get("metrics", {})
     if not metrics:
         state.validation_passed = False
-        state.errors.append("Evidence validation warning: No metrics extracted.")
-        return state
-
-    repo = get_database_repository()
-    validated_citations = 0
-    validation_issues = []
-
-    for name, m in metrics.items():
-        citation = m.get("citation") or {}
-        page_num = citation.get("page_number", 0)
-        is_calc = citation.get("is_calculated", False)
-
-        if is_calc:
-            validated_citations += 1
-        else:
-            cit_doc_id = citation.get("document_id")
-            if cit_doc_id and cit_doc_id != state.document_id:
-                validation_issues.append(f"Metric '{name}' citation document mismatch: {cit_doc_id}")
-
-            if state.total_pages > 0 and (page_num < 1 or page_num > state.total_pages):
-                validation_issues.append(f"Metric '{name}' citation page {page_num} out of bounds (1-{state.total_pages})")
-            elif page_num > 0:
-                validated_citations += 1
-
-    if validated_citations > 0:
-        state.validation_passed = True
-        state.current_phase = "VALIDATION_PASSED"
+        state.is_failed = True
+        err_msg = "Evidence validation failed: No financial metrics were extracted."
+        state.errors.append(err_msg)
+        state.validation_issues.append(err_msg)
         state.execution_steps.append(
             AgentExecutionLog(
                 step_name="evidence_validation_node",
                 agent="EVIDENCE_VALIDATION",
-                status="SUCCESS",
+                status="FAILED",
                 timestamp=start_time,
-                message=f"Validated {validated_citations} metric citations across document filings.",
+                message=err_msg,
             )
         )
         if state.job_id:
-            repo.update_processing_job(state.job_id, status="PROCESSING", current_stage="EVIDENCE_VALIDATION_COMPLETED")
-    else:
+            repo.update_processing_job(
+                state.job_id, status="FAILED", current_stage="EVIDENCE_VALIDATION", error_message=err_msg
+            )
+        return state
+
+    document = repo.get_document_by_id(state.document_id)
+    document_exists = document is not None
+    total_pages = state.total_pages or int((document or {}).get("total_pages") or 0)
+    state.total_pages = total_pages
+
+    page_texts = state.page_texts
+    if not page_texts and document_exists:
+        page_texts = load_page_texts(
+            document_id=state.document_id,
+            file_bytes=state.file_bytes,
+            storage_path=state.storage_path,
+            repository=repo,
+            storage=get_file_storage(),
+        )
+    state.page_texts = page_texts
+
+    outcome = validate_metrics(
+        metrics=metrics,
+        page_texts=page_texts,
+        total_pages=total_pages,
+        document_id=state.document_id,
+        document_exists=document_exists,
+    )
+
+    state.validated_metrics_count = outcome.verified_count
+    state.unverified_metrics = [
+        {"name": name, "reason": validation.reason}
+        for name, validation in outcome.rejected_metrics.items()
+    ]
+    for item in state.unverified_metrics:
+        state.validation_issues.append(f"Metric '{item['name']}' rejected: {item['reason']}")
+
+    if outcome.verified_count == 0:
         state.validation_passed = False
-        err_msg = "Evidence validation warning: Low extraction confidence or missing citations."
+        state.is_failed = True
+        err_msg = "Evidence validation failed: no metric could be verified against the source document."
+        if state.unverified_metrics:
+            err_msg += " " + "; ".join(
+                f"{item['name']}: {item['reason']}" for item in state.unverified_metrics[:5]
+            )
         state.errors.append(err_msg)
         state.execution_steps.append(
             AgentExecutionLog(
@@ -266,13 +362,88 @@ def evidence_validation_node(state: FinancialResearchState) -> FinancialResearch
             )
         )
         if state.job_id:
-            repo.update_processing_job(state.job_id, status="FAILED", current_stage="EVIDENCE_VALIDATION", error_message=err_msg)
+            repo.update_processing_job(
+                state.job_id, status="FAILED", current_stage="EVIDENCE_VALIDATION", error_message=err_msg
+            )
+        if document_exists:
+            try:
+                repo.record_agent_run(
+                    document_id=state.document_id,
+                    session_id=state.session_id,
+                    agent_name="EVIDENCE_VALIDATION",
+                    status="FAILED",
+                    input_payload={"metrics_evaluated": len(metrics)},
+                    output_payload={"metrics_verified": 0, "metrics_rejected": outcome.rejected_count},
+                    error_message=err_msg,
+                )
+            except Exception:
+                logger.exception("Could not record failed evidence validation run")
+        return state
+
+    try:
+        _apply_validated_metrics(state, repo, set(outcome.verified_metrics.keys()))
+    except Exception as exc:
+        logger.exception("Failed to persist validated metrics: %s", exc)
+        state.is_failed = True
+        state.validation_passed = False
+        err_msg = f"Evidence validation failed while persisting verified metrics: {exc}"
+        state.errors.append(err_msg)
+        if state.job_id:
+            repo.update_processing_job(
+                state.job_id, status="FAILED", current_stage="EVIDENCE_VALIDATION", error_message=err_msg
+            )
+        return state
+
+    state.validation_passed = True
+    state.current_phase = "VALIDATION_PASSED"
+    rejected_note = (
+        f" {outcome.rejected_count} unsupported metric(s) were rejected and not persisted."
+        if outcome.rejected_count
+        else ""
+    )
+    state.execution_steps.append(
+        AgentExecutionLog(
+            step_name="evidence_validation_node",
+            agent="EVIDENCE_VALIDATION",
+            status="SUCCESS",
+            timestamp=start_time,
+            message=(
+                f"Verified {outcome.verified_count} metric citations against source pages."
+                + rejected_note
+            ),
+        )
+    )
+
+    try:
+        repo.record_agent_run(
+            document_id=state.document_id,
+            session_id=state.session_id,
+            agent_name="EVIDENCE_VALIDATION",
+            status="COMPLETED",
+            input_payload={"metrics_evaluated": len(metrics)},
+            output_payload={
+                "metrics_verified": outcome.verified_count,
+                "metrics_rejected": outcome.rejected_count,
+                "rejected": state.unverified_metrics,
+            },
+        )
+    except Exception:
+        logger.exception("Could not record evidence validation run")
+
+    if state.job_id:
+        repo.update_processing_job(
+            state.job_id, status="PROCESSING", current_stage="EVIDENCE_VALIDATION_COMPLETED"
+        )
 
     return state
 
 
 def red_flag_agent_node(state: FinancialResearchState) -> FinancialResearchState:
-    """Step 4: Hybrid Financial Risk Detection (Deterministic Rules + LLM Disclosures)."""
+    """Step 4: Hybrid Financial Risk Detection with evidence validation.
+
+    Any exception marks the workflow as failed, records a failed agent run, and
+    prevents partial findings from being presented or persisted as validated.
+    """
     if state.is_failed or not state.validation_passed:
         logger.warning("Skipping red_flag_agent_node due to upstream validation failure.")
         return state
@@ -298,7 +469,7 @@ def red_flag_agent_node(state: FinancialResearchState) -> FinancialResearchState
             session_id=state.session_id,
         )
 
-        state.red_flag_findings = [
+        candidate_findings = [
             {
                 "finding_id": f.finding_id,
                 "category": f.category.value,
@@ -307,18 +478,99 @@ def red_flag_agent_node(state: FinancialResearchState) -> FinancialResearchState
                 "description": f.description,
                 "supporting_evidence": f.supporting_evidence,
                 "source_page": f.source_citation.page_number,
+                "detection_method": getattr(f, "detection_method", "RULE_BASED"),
+                "citation": {
+                    "document_id": f.source_citation.document_id,
+                    "page_number": f.source_citation.page_number,
+                    "exact_quote": f.source_citation.exact_quote,
+                    "is_calculated": f.source_citation.is_calculated,
+                },
             }
             for f in findings
         ]
-        state.red_flag_count = len(state.red_flag_findings)
+
+        # Verify each finding against the cited page before exposing it.
+        page_texts = state.page_texts
+        if not page_texts:
+            page_texts = load_page_texts(
+                document_id=state.document_id,
+                file_bytes=state.file_bytes,
+                storage_path=state.storage_path,
+                repository=repo,
+                storage=get_file_storage(),
+            )
+            state.page_texts = page_texts
+
+        validated_metric_pages = {
+            int((m.get("citation") or {}).get("page_number") or 0)
+            for m in (state.extracted_financials or {}).get("metrics", {}).values()
+        }
+
+        verified_findings: List[Dict[str, Any]] = []
+        rejected_findings: List[Dict[str, str]] = []
+        for finding in candidate_findings:
+            check = validate_red_flag_finding(
+                finding=finding,
+                page_texts=page_texts,
+                total_pages=state.total_pages,
+                document_id=state.document_id,
+                validated_metric_pages=validated_metric_pages,
+            )
+            if check.verified:
+                verified_findings.append(finding)
+            else:
+                rejected_findings.append(
+                    {
+                        "title": str(finding.get("title", "")),
+                        "reason": check.reason,
+                    }
+                )
+
+        state.rejected_red_flags = rejected_findings
+        for item in rejected_findings:
+            state.validation_issues.append(
+                f"Red flag '{item['title']}' rejected: {item['reason']}"
+            )
+
+        if rejected_findings:
+            repo.store_red_flag_findings(
+                document_id=state.document_id,
+                findings=verified_findings,
+                session_id=state.session_id,
+            )
+
+        state.red_flag_findings = verified_findings
+        state.red_flag_count = len(verified_findings)
         state.current_phase = "RED_FLAGS_IDENTIFIED"
+
+        repo.record_agent_run(
+            document_id=state.document_id,
+            session_id=state.session_id,
+            agent_name="FINDING_EVIDENCE_VALIDATION",
+            status="COMPLETED",
+            input_payload={"findings_evaluated": len(candidate_findings)},
+            output_payload={
+                "findings_verified": len(verified_findings),
+                "findings_rejected": len(rejected_findings),
+                "rejected": rejected_findings,
+            },
+        )
+
         state.execution_steps.append(
             AgentExecutionLog(
                 step_name="red_flag_agent_node",
                 agent="RED_FLAG_AGENT",
                 status="SUCCESS",
                 timestamp=start_time,
-                message=f"Identified {state.red_flag_count} risk findings.",
+                message=(
+                    f"Identified {len(candidate_findings)} risk findings; "
+                    f"{len(verified_findings)} verified against source pages"
+                    + (
+                        f", {len(rejected_findings)} rejected for insufficient evidence."
+                        if rejected_findings
+                        else "."
+                    )
+                ),
             )
         )
         if state.job_id:
@@ -326,6 +578,10 @@ def red_flag_agent_node(state: FinancialResearchState) -> FinancialResearchState
 
     except Exception as e:
         logger.exception("Error in red_flag_agent_node: %s", e)
+        state.is_failed = True
+        state.validation_passed = False
+        state.red_flag_findings = []
+        state.red_flag_count = 0
         state.errors.append(f"Red Flag Agent Error: {e}")
         state.execution_steps.append(
             AgentExecutionLog(
@@ -336,6 +592,23 @@ def red_flag_agent_node(state: FinancialResearchState) -> FinancialResearchState
                 message=str(e),
             )
         )
+        if state.job_id:
+            repo.update_processing_job(
+                state.job_id,
+                status="FAILED",
+                current_stage="RED_FLAG_AGENT",
+                error_message=str(e),
+            )
+        try:
+            repo.record_agent_run(
+                document_id=state.document_id,
+                session_id=state.session_id,
+                agent_name="RED_FLAG_AGENT",
+                status="FAILED",
+                error_message=str(e),
+            )
+        except Exception:
+            logger.exception("Could not record failed Red Flag agent run for %s", state.document_id)
 
     return state
 
@@ -345,25 +618,30 @@ def persistence_node(state: FinancialResearchState) -> FinancialResearchState:
     logger.info("Executing persistence node for doc: %s", state.document_id)
     repo = get_database_repository()
 
-    status_str = "COMPLETED" if not state.is_failed else "FAILED"
+    succeeded = not state.is_failed and state.validation_passed
+    status_str = "COMPLETED" if succeeded else "FAILED"
     err_str = "; ".join(state.errors) if state.errors else None
 
     if state.job_id:
         repo.update_processing_job(
             job_id=state.job_id,
             status=status_str,
-            current_stage="PIPELINE_COMPLETED",
+            current_stage="PIPELINE_COMPLETED" if succeeded else "PIPELINE_FAILED",
             error_message=err_str,
         )
 
-    state.current_phase = "COMPLETED" if not state.is_failed else "FAILED"
+    state.current_phase = "COMPLETED" if succeeded else "FAILED"
     state.final_summary = {
         "document_id": state.document_id,
         "filename": state.filename,
         "total_pages": state.total_pages,
         "chunk_count": state.chunk_count,
         "metrics_extracted": state.extracted_metrics_count,
+        "metrics_verified": state.validated_metrics_count,
+        "metrics_rejected": len(state.unverified_metrics),
         "red_flags_identified": state.red_flag_count,
+        "red_flags_rejected": len(state.rejected_red_flags),
+        "validation_issues": state.validation_issues,
         "status": status_str,
     }
 

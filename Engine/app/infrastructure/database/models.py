@@ -103,6 +103,18 @@ CREATE TABLE IF NOT EXISTS ai_agent_runs (
     completed_at TIMESTAMP WITH TIME ZONE
 );
 
+CREATE TABLE IF NOT EXISTS ai_research_messages (
+    message_id VARCHAR(64) PRIMARY KEY,
+    session_id VARCHAR(64) NOT NULL,
+    document_id VARCHAR(64),
+    role VARCHAR(16) NOT NULL,
+    content TEXT NOT NULL,
+    citations JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_research_messages_session ON ai_research_messages(session_id);
+
 -- Legacy development tables maintained for backward compatibility
 CREATE TABLE IF NOT EXISTS workspaces (
     workspace_id VARCHAR(64) PRIMARY KEY,
@@ -240,6 +252,17 @@ CREATE TABLE IF NOT EXISTS ai_agent_runs (
     started_at TEXT NOT NULL,
     completed_at TEXT,
     FOREIGN KEY(document_id) REFERENCES ai_documents(document_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ai_research_messages (
+    message_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    document_id TEXT,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    citations TEXT DEFAULT '[]',
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL
 );
 
 -- Legacy development tables

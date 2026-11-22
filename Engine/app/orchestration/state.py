@@ -45,6 +45,13 @@ class FinancialResearchState(BaseModel):
     extracted_financials: Optional[Dict[str, Any]] = None
     extracted_metrics_count: int = 0
 
+    # Evidence Validation Stage (Milestone 2.4)
+    validated_metrics_count: int = 0
+    unverified_metrics: List[Dict[str, str]] = Field(default_factory=list)
+    validation_issues: List[str] = Field(default_factory=list)
+    rejected_red_flags: List[Dict[str, str]] = Field(default_factory=list)
+    page_texts: Dict[int, str] = Field(default_factory=dict, exclude=True)
+
     # Red Flag Agent Stage (Milestone 2)
     red_flag_findings: List[Dict[str, Any]] = Field(default_factory=list)
     red_flag_count: int = 0

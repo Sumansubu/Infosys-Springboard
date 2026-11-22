@@ -269,6 +269,24 @@ export default function ChatMessageItem({
               </div>
             )}
 
+            {/* 4b. Unavailable Information */}
+            {message.unavailableInformation && message.unavailableInformation.length > 0 && (
+              <div className="supporting-evidence-box unavailable-info-box">
+                <span className="evidence-title flex-row items-center gap-1">
+                  <AlertCircle size={13} className="text-warning" />
+                  Not Available in Source Documents
+                </span>
+                <ul className="evidence-list">
+                  {message.unavailableInformation.map((item, iIdx) => (
+                    <li key={iIdx} className="evidence-item">
+                      <span className="bullet-dash">•</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* 5. Source Citations (Document names & page references) */}
             {message.citations && message.citations.length > 0 && (
               <div className="chat-citations-strip">

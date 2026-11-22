@@ -2,6 +2,20 @@
 **Infosys Springboard — Vidzai Digital**  
 **Milestone 1 Implementation & Future Agent Entity Schemas**
 
+> **Milestone 2.4 / 3 additions (implemented):**
+>
+> - `ai_financial_metrics` / `ai_metric_evidence` store the verified metric subset; rejected
+>   metrics are removed during evidence validation.
+> - `ai_red_flag_findings` stores only evidence-validated findings (`detection_method`
+>   distinguishes `RULE_BASED` and `LLM_DISCLOSURE`).
+> - `ai_agent_runs` now records `EVIDENCE_VALIDATION` and `FINDING_EVIDENCE_VALIDATION` runs.
+> - **New table `ai_research_messages`:** `message_id` (PK), `session_id`, `document_id`,
+>   `role` (`user`/`assistant`), `content`, `citations` (JSON), `metadata` (JSON),
+>   `created_at`. Backs research conversation context. Alembic revision
+>   `002_research_session_messages`; SQLite and PostgreSQL DDL in `models.py`.
+> - **No comparison or report persistence tables were added in M3**; Comparison and Report
+>   responses are computed on demand. Persistent reports are Milestone 4 work.
+
 ---
 
 ## 1. Relational Architecture (Supabase PostgreSQL / SQLite Dual-Mode)

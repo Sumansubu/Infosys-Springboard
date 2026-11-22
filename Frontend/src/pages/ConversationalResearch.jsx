@@ -18,13 +18,97 @@ import CitationDetailsModal from "../components/chat/CitationDetailsModal";
 import DocumentViewer from "../components/DocumentViewer";
 import {
   SUGGESTED_RESEARCH_QUESTIONS,
-  generateMockAgentResponse,
   getStoredChatHistory,
   saveStoredChatHistory,
   clearStoredChatHistory
 } from "../data/researchChatData";
 import { INITIAL_DOCUMENTS, getStoredDocuments } from "../data/documentData";
 import api from "../services/api";
+
+function mapCitation(citation, index = 0) {
+  return {
+    id: citation.id || `cite-${citation.document_id || "doc"}-${citation.page_number || 0}-${index}`,
+    documentId: citation.document_id || null,
+    docName: citation.document_name || citation.filename || "Financial Filing",
+    company: citation.company || null,
+    page: citation.page_number ?? null,
+    section: citation.section || null,
+    passage: citation.exact_quote || citation.quote || "",
+    metricName: citation.metric_name || null,
+    isCalculated: Boolean(citation.is_calculated)
+  };
+}
+
+function mapAssistantAnswer(response) {
+  const citations = (response.citations || []).map(mapCitation);
+  const facts = [
+    ...(response.direct_facts || []),
+    ...(response.calculated_values || []),
+    ...(response.analytical_conclusions || [])
+  ];
+  const unavailable = response.unavailable_information || [];
+
+  return {
+    id: response.message_id || `assistant-${Date.now()}`,
+    role: "assistant",
+    timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    conciseAnswer: response.answer || "No grounded answer was produced.",
+    stepByStepExplanation: (response.steps || []).map((s) => ({
+      step: s.step,
+      title: s.title,
+      detail: s.detail
+    })),
+    supportingEvidence: facts,
+    unavailableInformation: unavailable,
+    citations,
+    sourceExcerpts: citations
+      .filter((c) => c.passage)
+      .slice(0, 8)
+      .map((c) => ({
+        docName: c.docName,
+        documentId: c.documentId,
+        page: c.page,
+        section: c.section,
+        snippet: c.passage
+      }))
+  };
+}
+
+function mapStoredMessage(message) {
+  if (message.role === "user") {
+    return {
+      id: message.message_id,
+      role: "user",
+      timestamp: new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      content: message.content
+    };
+  }
+  const metadata = message.metadata || {};
+  return {
+    id: message.message_id,
+    role: "assistant",
+    timestamp: new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    conciseAnswer: message.content,
+    stepByStepExplanation: metadata.steps || [],
+    supportingEvidence: [
+      ...(metadata.direct_facts || []),
+      ...(metadata.calculated_values || []),
+      ...(metadata.analytical_conclusions || [])
+    ],
+    unavailableInformation: metadata.unavailable_information || [],
+    citations: (message.citations || []).map(mapCitation),
+    sourceExcerpts: (message.citations || [])
+      .filter((c) => c.exact_quote)
+      .slice(0, 8)
+      .map((c) => ({
+        docName: c.document_name,
+        documentId: c.document_id,
+        page: c.page_number,
+        section: c.section,
+        snippet: c.exact_quote
+      }))
+  };
+}
 
 export default function ConversationalResearch({
   documents: initialDocumentsProp,
@@ -91,19 +175,45 @@ export default function ConversationalResearch({
     setSelectedDocIds(updatedScope.map((d) => d.id));
   }, [activeSession?.id, availableDocs]);
 
-  // Synchronize chat history when user switches research sessions
+  // Load persisted research-session context from the backend. Falls back to
+  // the local cache only when the API is unreachable; never fabricates turns.
   useEffect(() => {
-    if (prevSessionIdRef.current !== sessionId) {
-      prevSessionIdRef.current = sessionId;
-      const loaded = getStoredChatHistory(sessionId);
-      setMessages(loaded);
-      setErrorState(null);
-      setIsTyping(false);
-      setTypingStage("");
-      const initialCite = loaded.find((m) => m.citations && m.citations.length > 0)?.citations?.[0];
-      setActiveCitation(initialCite || null);
+    let cancelled = false;
+    prevSessionIdRef.current = sessionId;
+    setErrorState(null);
+    setIsTyping(false);
+    setTypingStage("");
+
+    const backendSessionId = activeSession?.id;
+    if (!backendSessionId) {
+      setMessages(getStoredChatHistory(sessionId));
+      return undefined;
     }
-  }, [sessionId]);
+
+    (async () => {
+      try {
+        const stored = await api.getResearchMessages(backendSessionId);
+        if (cancelled) return;
+        const mapped = Array.isArray(stored) ? stored.map(mapStoredMessage) : [];
+        setMessages(mapped);
+        const initialCite = mapped.find((m) => m.citations && m.citations.length > 0)?.citations?.[0];
+        setActiveCitation(initialCite || null);
+      } catch (err) {
+        if (cancelled) return;
+        setMessages(getStoredChatHistory(sessionId));
+        if (err?.status && err.status !== 404) {
+          setErrorState({
+            title: "Research History Unavailable",
+            message: err.message || "Could not load conversation history from the research backend."
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, activeSession?.id]);
 
   // Save messages to localStorage for current session
   useEffect(() => {
@@ -172,97 +282,34 @@ export default function ConversationalResearch({
     setMessages((prev) => [...prev, userMsg]);
     setIsTyping(true);
 
-    // 2. Multi-stage asynchronous retrieval and response synthesis
-    setTypingStage("Searching vector index & ranking financial passages...");
+    // 2. Grounded multi-step research request to the Research Agent
+    setTypingStage("Decomposing question & retrieving source passages...");
 
     (async () => {
       try {
-        const searchRes = await api.search({ query: queryText, top_k: 4 });
-        setTypingStage("Verifying financial line items and citations...");
-        await new Promise((r) => setTimeout(r, 350));
+        const response = await api.askResearch(activeSession?.id || null, {
+          question: queryText,
+          document_ids: selectedDocIds,
+          top_k: 6
+        });
 
-        setTypingStage("Synthesizing research response...");
-        await new Promise((r) => setTimeout(r, 350));
-
-        const selectedDocs = sessionScopeDocs.filter((d) => selectedDocIds.includes(d.id));
-        let responsePayload = null;
-
-        if (searchRes?.results && searchRes.results.length > 0) {
-          const liveCitations = searchRes.results.map((r, idx) => ({
-            id: `cite-${r.chunkId || idx}`,
-            docName: r.docName || selectedDocs[0]?.name || "Financial Filing",
-            company: r.company || activeSession?.company || selectedDocs[0]?.company || "Entity",
-            ticker: r.ticker || activeSession?.ticker || selectedDocs[0]?.ticker || "FILING",
-            page: r.page || 1,
-            section: "Audited Financial Filing Disclosure",
-            passage: r.textSnippet || r.text || "",
-            confidence: typeof r.score === "number" ? Math.min(0.99, Math.max(0.75, r.score)) : 0.94
-          }));
-
-          const primaryChunk = searchRes.results[0];
-          const conciseSummary = `Based on vector retrieval across indexed filings (${searchRes.retrieverUsed || "Hybrid Search"}): ${primaryChunk.textSnippet ? primaryChunk.textSnippet.slice(0, 320) + "..." : "Disclosures retrieved from financial statements."}`;
-
-          responsePayload = {
-            conciseAnswer: conciseSummary,
-            stepByStepExplanation: [
-              {
-                step: 1,
-                title: "Dense Vector & BM25 Retrieval",
-                detail: `Retrieved ${searchRes.results.length} relevant candidate chunks using ${searchRes.retrieverUsed}.`
-              },
-              {
-                step: 2,
-                title: "Source Document Grounding",
-                detail: `Extracted verbatim passages across ${Array.from(new Set(liveCitations.map((c) => `${c.docName} (p. ${c.page})`))).join(", ")}.`
-              },
-              {
-                step: 3,
-                title: "Multi-Agent Synthesis",
-                detail: "Synthesized direct answer with strict document provenance and zero hallucination."
-              }
-            ],
-            supportingEvidence: searchRes.results.slice(0, 3).map((r) =>
-              `${r.docName} [Page ${r.page}]: "${(r.textSnippet || "").slice(0, 180)}..."`
-            ),
-            citations: liveCitations
-          };
-        } else {
-          responsePayload = generateMockAgentResponse(queryText, selectedDocs, activeSession);
-        }
-
-        const assistantMsg = {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          ...responsePayload
-        };
-
+        const assistantMsg = mapAssistantAnswer(response);
         setMessages((prev) => [...prev, assistantMsg]);
         setIsTyping(false);
         setTypingStage("");
 
-        if (responsePayload.citations && responsePayload.citations.length > 0) {
-          setActiveCitation(responsePayload.citations[0]);
+        if (assistantMsg.citations && assistantMsg.citations.length > 0) {
+          setActiveCitation(assistantMsg.citations[0]);
         }
       } catch (err) {
-        console.warn("Live search error, falling back:", err);
-        const selectedDocs = sessionScopeDocs.filter((d) => selectedDocIds.includes(d.id));
-        const mockResponse = generateMockAgentResponse(queryText, selectedDocs, activeSession);
-
-        const assistantMsg = {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          ...mockResponse
-        };
-
-        setMessages((prev) => [...prev, assistantMsg]);
         setIsTyping(false);
         setTypingStage("");
-
-        if (mockResponse.citations && mockResponse.citations.length > 0) {
-          setActiveCitation(mockResponse.citations[0]);
-        }
+        setErrorState({
+          title: "Research Agent Error",
+          message:
+            err?.message ||
+            "The Research Agent could not complete this query. No answer was generated, so no unsupported information is shown."
+        });
       }
     })();
   }
@@ -280,8 +327,9 @@ export default function ConversationalResearch({
   }
 
   // Handle Launch Document Viewer
-  function handleViewDocument(docName, page) {
+  function handleViewDocument(docName, page, documentId = null) {
     const targetDoc =
+      (documentId && availableDocs.find((d) => d.id === documentId || d.documentId === documentId)) ||
       availableDocs.find((d) => d.name === docName) ||
       sessionScopeDocs.find((d) => d.name === docName) ||
       availableDocs.find((d) => d.company === activeSession?.company) ||
@@ -300,12 +348,21 @@ export default function ConversationalResearch({
     }
   }
 
-  function handleClearChat() {
-    if (window.confirm("Clear conversation history for this research session?")) {
-      setMessages([]);
-      clearStoredChatHistory(sessionId);
-      setErrorState(null);
-      setActiveCitation(null);
+  async function handleClearChat() {
+    if (!window.confirm("Clear conversation history for this research session?")) return;
+    setMessages([]);
+    clearStoredChatHistory(sessionId);
+    setErrorState(null);
+    setActiveCitation(null);
+    if (activeSession?.id) {
+      try {
+        await api.clearResearchMessages(activeSession.id);
+      } catch (err) {
+        setErrorState({
+          title: "Could Not Clear Session Context",
+          message: err?.message || "The local conversation was cleared, but the backend session context could not be cleared."
+        });
+      }
     }
   }
 

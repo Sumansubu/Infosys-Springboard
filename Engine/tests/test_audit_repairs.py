@@ -88,26 +88,44 @@ class TestAuditRepairs(unittest.TestCase):
                 }
             }
         }
-        validated_state = evidence_validation_node(state)
+        repo = SQLiteRepository(db_path=":memory:")
+        with patch("app.orchestration.workflow.get_database_repository", return_value=repo):
+            validated_state = evidence_validation_node(state)
         self.assertFalse(validated_state.validation_passed)
 
     def test_evidence_validation_passes_valid_citations(self):
-        """Verify evidence_validation_node passes when valid within-bounds citations exist."""
+        """Verify evidence_validation_node passes only with a verified quote and value."""
+        repo = SQLiteRepository(db_path=":memory:")
+        repo.create_document({
+            "document_id": "doc_test_001",
+            "sha256": "evidence-pass-hash",
+            "filename": "report.pdf",
+            "stored_filename": "report.pdf",
+            "storage_path": "",
+            "total_pages": 10,
+        })
         state = FinancialResearchState(
             document_id="doc_test_001",
             filename="report.pdf",
             total_pages=10,
+            page_texts={3: "Consolidated income statement. Revenue: 1000 for the year."},
         )
         state.extracted_financials = {
             "metrics": {
                 "REVENUE": {
                     "name": "REVENUE",
                     "value": "1000",
-                    "citation": {"document_id": "doc_test_001", "page_number": 3, "is_calculated": False},
+                    "citation": {
+                        "document_id": "doc_test_001",
+                        "page_number": 3,
+                        "exact_quote": "Revenue: 1000",
+                        "is_calculated": False,
+                    },
                 }
             }
         }
-        validated_state = evidence_validation_node(state)
+        with patch("app.orchestration.workflow.get_database_repository", return_value=repo):
+            validated_state = evidence_validation_node(state)
         self.assertTrue(validated_state.validation_passed)
         self.assertEqual(validated_state.current_phase, "VALIDATION_PASSED")
 

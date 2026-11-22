@@ -1,6 +1,13 @@
 # System Architecture: Multi-Agent Financial Research System
 **Infosys Springboard — Vidzai Digital**  
-**Milestone 1 Implementation & Future Agent System Blueprint**
+**Milestone 1–3 Architecture**
+
+> **Milestone 3 update:** The request-time agent layer now includes Research, Comparison,
+> and Report agents (`app/agents/research_agent`, `comparison_agent`, `report_agent`) with
+> routes in `app/api/routes/research.py`, `comparison.py`, and `reports.py`. They are
+> invoked on user action rather than on every upload. Research session context is stored in
+> `ai_research_messages`. Evidence validation (`app/orchestration/evidence.py`) now verifies
+> both metric citations and red-flag findings against source PDF pages.
 
 ---
 

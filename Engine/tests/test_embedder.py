@@ -4,7 +4,10 @@ import math
 import unittest
 from unittest.mock import MagicMock, patch
 
+import importlib.util
+
 from app.infrastructure.document_processing.embedder import (
+    HashingEmbeddingProvider,
     OpenAIEmbeddingProvider,
     SentenceTransformerEmbeddingProvider,
     generate_embeddings,
@@ -15,6 +18,10 @@ from app.infrastructure.document_processing.embedder import (
 class TestEmbeddingEngine(unittest.TestCase):
     """Unit tests for embedding generation across local and cloud providers."""
 
+    @unittest.skipUnless(
+        importlib.util.find_spec("sentence_transformers") is not None,
+        "sentence-transformers (optional neural embedder) is not installed; offline hashing provider is covered instead.",
+    )
     def test_sentence_transformer_provider_dimension_and_encoding(self):
         local_provider = SentenceTransformerEmbeddingProvider()
         self.assertEqual(local_provider.get_dimension(), 384)
@@ -32,8 +39,17 @@ class TestEmbeddingEngine(unittest.TestCase):
         norm = math.sqrt(sum(x * x for x in embeddings[0]))
         self.assertAlmostEqual(norm, 1.0, places=4)
 
+    def test_hashing_provider_is_deterministic_and_normalized(self):
+        provider = HashingEmbeddingProvider()
+        self.assertEqual(provider.get_dimension(), 384)
+        embeddings = provider.generate_embeddings(["Revenue and net income grew", "Revenue and net income grew"])
+        self.assertEqual(len(embeddings[0]), 384)
+        self.assertEqual(embeddings[0], embeddings[1])
+        norm = math.sqrt(sum(x * x for x in embeddings[0]))
+        self.assertAlmostEqual(norm, 1.0, places=4)
+
     def test_empty_input_returns_empty_list(self):
-        local_provider = SentenceTransformerEmbeddingProvider()
+        local_provider = HashingEmbeddingProvider()
         embeddings = local_provider.generate_embeddings([])
         self.assertEqual(embeddings, [])
 

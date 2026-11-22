@@ -100,7 +100,7 @@ class RedFlagAgentService:
                 "severity": f.severity.value,
                 "title": f.title,
                 "description": f.description,
-                "detection_method": "RULE_BASED" if f in rule_findings else "LLM_DISCLOSURE",
+                "detection_method": getattr(f, "detection_method", "RULE_BASED"),
                 "supporting_evidence": f.supporting_evidence,
                 "source_page": f.source_citation.page_number,
                 "requires_review": True,

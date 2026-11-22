@@ -27,6 +27,8 @@ from app.infrastructure.document_processing import (
     PyMuPDFParser,
     StructureAwareChunker,
     generate_embeddings,
+    get_embedding_dimension,
+    get_embedding_provider,
 )
 from app.infrastructure.storage import FileStorageInterface, get_file_storage
 from app.infrastructure.vector_store import (
@@ -153,8 +155,12 @@ class DocumentAgentService:
                 "bucket": bucket_name,
                 "file_size_bytes": len(file_bytes),
                 "embedding_provider": self.settings.embedding_provider,
-                "embedding_model": self.settings.embedding_model,
-                "embedding_dimension": self.settings.embedding_dimension,
+                "embedding_model": getattr(
+                    get_embedding_provider(),
+                    "get_model_name",
+                    lambda: self.settings.embedding_model,
+                )(),
+                "embedding_dimension": get_embedding_dimension(),
                 "ocr_engine": "PyMuPDF High-Fidelity Extraction",
             },
         }

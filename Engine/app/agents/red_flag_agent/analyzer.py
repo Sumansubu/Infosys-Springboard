@@ -135,6 +135,7 @@ Disclosures Text:
                             exact_quote=quote,
                             is_calculated=False,
                         ),
+                        detection_method="LLM_DISCLOSURE",
                     )
                 )
         except Exception as e:

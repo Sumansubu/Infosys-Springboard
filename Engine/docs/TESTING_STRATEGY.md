@@ -1,6 +1,46 @@
 # Testing and Quality Assurance Strategy
 **Infosys Springboard — Vidzai Digital: Multi-Agent Financial Research System**  
-**Milestone 1 & Milestone 2 Testing Protocol**
+**Milestones 1–3 Testing Protocol**
+
+## Milestone 2.4 / 3 additions (implemented)
+
+| Suite | Coverage |
+| --- | --- |
+| `tests/test_m24_validation.py` | Document upload/parse/dedupe/empty PDF/chunk metadata/embedding dimensions; extraction values, ratios, missing data, invalid numbers, unsupported-metric rejection; red-flag rules (leverage, liquidity, margins, OCF/FCF, false positives); evidence quote/page/document checks; orchestration failure handling; red-flag failure discards partial findings |
+| `tests/test_m3_agents.py` | Grounded multi-metric research, summary questions, unavailable information, risk questions, session follow-ups, same/cross-currency comparison, missing metrics, report sections and citations |
+| `scripts/validate_seed_documents.py` | Real seed PDFs: expected values vs actual, citation page/quote/value verification, independent Decimal ratio recomputation, red-flag evidence verification |
+
+### Running
+
+```bash
+cd Engine
+./venv/Scripts/python.exe run_tests.py
+./venv/Scripts/python.exe scripts/validate_seed_documents.py
+```
+
+The seed validation script writes `docs/VALIDATION_REPORT.md` and
+`docs/validation_report.json`. It uses an isolated temporary SQLite/ChromaDB instance.
+
+### Test data isolation
+
+`run_tests.py` creates a temporary directory and points `SQLITE_DB_PATH`,
+`UPLOAD_DIR`, `CHROMA_DB_DIR` and `CHROMA_COLLECTION` at it before any application
+module is imported. `tests/__init__.py` applies the same settings for direct
+`python -m unittest tests.test_*` runs, and `tests/conftest.py` covers `pytest`.
+Test runs never read or write `documents.db`, the demo upload folder or the demo
+vector collection, and the temporary directory is removed afterwards.
+
+### Environment notes
+
+- The full suite is designed to run with `EMBEDDING_PROVIDER=hashing`, `VECTOR_STORE_TYPE=chroma`,
+  `LLM_PROVIDER=mock`, and `STORAGE_PROVIDER=local` (see `Engine/.env`).
+- ChromaDB is optional: if `chromadb` cannot be imported, `ChromaVectorStore` delegates to
+  `LocalJSONVectorStore` (a dependency-free, file-backed cosine index), so the suite runs and
+  passes on machines where the native ChromaDB wheel is unavailable.
+- The SentenceTransformers test is skipped only when that optional package is absent; an
+  equivalent deterministic hashing-provider test always runs.
+- Tests that exercise the real pipeline use unique document IDs inside the temporary
+database; they no longer add workspaces, documents or research messages to the demo data.
 
 ---
 

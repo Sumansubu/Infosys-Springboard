@@ -520,31 +520,13 @@ export default function App() {
             />
           )}
 
-          {/* Module 4: AI Research (Milestone 3 — Under Development Stub) */}
+          {/* Module 4: AI Research (Milestone 3 — Conversational Research Agent) */}
           {activePage === "Research" && (
-            <StubPage
-              milestone="Milestone 3"
-              title="Conversational Financial Research Agent"
-              agentName="Research Agent"
-              description="Interactive natural-language financial query reasoning, dynamic multi-hop vector retrieval, and conversational source synthesis are scheduled for delivery in Milestone 3."
-              plannedFeatures={[
-                {
-                  title: "Multi-Step Financial Query Decomposition",
-                  description: "Parses complex analyst inquiries into structured sub-queries across income statements, balance sheets, and MD&A footnotes."
-                },
-                {
-                  title: "Grounded Conversational Context",
-                  description: "Maintains multi-turn analytical context grounded strictly in uploaded company filings with strict hallucination guards."
-                },
-                {
-                  title: "Interactive Source Citation Inspector",
-                  description: "Displays step-by-step agent reasoning chains alongside verbatim excerpts and bounding box page locations."
-                },
-                {
-                  title: "Automated Metric Cross-Referencing",
-                  description: "Correlates executive statements in earnings calls against audited figures in statutory annual reports."
-                }
-              ]}
+            <ConversationalResearch
+              documents={documents}
+              session={activeSession}
+              sessions={sessions}
+              setActiveSession={setActiveSession}
               setPage={navigateTo}
             />
           )}

@@ -99,6 +99,7 @@ class RedFlagFinding(BaseModel):
     reason_for_classification: str
     relevant_period: str
     source_citation: SourceCitation
+    detection_method: str = "RULE_BASED"
 
 
 # ==============================================================================

@@ -1,6 +1,12 @@
 # Multi-Agent Orchestration Specification
 **Infosys Springboard — Vidzai Digital: Multi-Agent Financial Research System**  
-**Milestone 2 Implementation: LangGraph Sequential 3-Agent Workflow**
+**Milestones 2–3: Sequential ingestion pipeline + request-time agents**
+
+> The ingestion pipeline is `Document -> Extraction -> Evidence Validation -> Red Flag -> Persistence`.
+> Research, Comparison, and Report agents are **not** part of the upload pipeline; they are
+> invoked per user request through their API routes. Evidence validation rejects metrics and
+> findings whose document/page/quote/value cannot be verified, and any agent exception marks
+> the processing job `FAILED` (partial findings discarded).
 
 ---
 

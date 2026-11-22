@@ -171,6 +171,26 @@ class DatabaseRepositoryInterface(ABC):
         pass
 
     @abstractmethod
+    def add_research_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        document_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def get_research_messages(self, session_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    def clear_research_messages(self, session_id: str) -> int:
+        pass
+
+    @abstractmethod
     def is_healthy(self) -> bool:
         pass
 
@@ -1238,6 +1258,77 @@ class SQLiteRepository(DatabaseRepositoryInterface):
                 "processing_jobs": p_row["c"] if p_row else 0,
             }
 
+    # =========================================================================
+    # Milestone 3: Research Session Conversation Context
+    # =========================================================================
+
+    def add_research_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        document_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        message_id = uuid4().hex
+        now = utc_now_iso()
+        citations_json = json.dumps(citations or [])
+        metadata_json = json.dumps(metadata or {})
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_research_messages (
+                    message_id, session_id, document_id, role, content,
+                    citations, metadata, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (message_id, session_id, document_id, role, content, citations_json, metadata_json, now),
+            )
+        return {
+            "message_id": message_id,
+            "session_id": session_id,
+            "document_id": document_id,
+            "role": role,
+            "content": content,
+            "citations": citations or [],
+            "metadata": metadata or {},
+            "created_at": now,
+        }
+
+    def get_research_messages(self, session_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM ai_research_messages
+                WHERE session_id = ?
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                (session_id,),
+            ).fetchall()
+
+        results: List[Dict[str, Any]] = []
+        for row in rows[-limit:] if limit and limit > 0 else rows:
+            item = dict(row)
+            try:
+                item["citations"] = json.loads(item.get("citations") or "[]")
+            except Exception:
+                item["citations"] = []
+            try:
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+            except Exception:
+                item["metadata"] = {}
+            results.append(item)
+        return results
+
+    def clear_research_messages(self, session_id: str) -> int:
+        with self._get_connection() as conn:
+            res = conn.execute(
+                "DELETE FROM ai_research_messages WHERE session_id = ?", (session_id,)
+            )
+            return res.rowcount
+
 
 class SupabasePostgresRepository(DatabaseRepositoryInterface):
     """Production Supabase PostgreSQL repository interface.
@@ -2175,6 +2266,102 @@ class SupabasePostgresRepository(DatabaseRepositoryInterface):
             except Exception as e:
                 logger.debug("Postgres error in get_agent_runs: %s", e)
         return self._fallback_repo.get_agent_runs(document_id)
+
+    def add_research_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        document_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        message_id = uuid4().hex
+        now = utc_now_iso()
+        if self._is_connected and self._engine:
+            try:
+                with self._engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO ai_research_messages (
+                                message_id, session_id, document_id, role, content,
+                                citations, metadata, created_at
+                            )
+                            VALUES (
+                                :message_id, :session_id, :document_id, :role, :content,
+                                CAST(:citations AS JSONB), CAST(:metadata AS JSONB), :created_at
+                            )
+                            """
+                        ),
+                        {
+                            "message_id": message_id,
+                            "session_id": session_id,
+                            "document_id": document_id,
+                            "role": role,
+                            "content": content,
+                            "citations": json.dumps(citations or []),
+                            "metadata": json.dumps(metadata or {}),
+                            "created_at": now,
+                        },
+                    )
+                return {
+                    "message_id": message_id,
+                    "session_id": session_id,
+                    "document_id": document_id,
+                    "role": role,
+                    "content": content,
+                    "citations": citations or [],
+                    "metadata": metadata or {},
+                    "created_at": now,
+                }
+            except Exception as e:
+                logger.warning("Postgres error in add_research_message: %s", e)
+        return self._fallback_repo.add_research_message(
+            session_id, role, content, citations, document_id, metadata
+        )
+
+    def get_research_messages(self, session_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+        if self._is_connected and self._engine:
+            try:
+                with self._engine.connect() as conn:
+                    rows = conn.execute(
+                        text(
+                            """
+                            SELECT * FROM ai_research_messages
+                            WHERE session_id = :session_id
+                            ORDER BY created_at ASC
+                            """
+                        ),
+                        {"session_id": session_id},
+                    ).mappings().all()
+                    results = []
+                    for r in rows[-limit:] if limit and limit > 0 else rows:
+                        item = self._format_row(r)
+                        for field_name, default in (("citations", []), ("metadata", {})):
+                            if isinstance(item.get(field_name), str):
+                                try:
+                                    item[field_name] = json.loads(item[field_name])
+                                except Exception:
+                                    item[field_name] = default
+                        results.append(item)
+                    return results
+            except Exception as e:
+                logger.debug("Postgres error in get_research_messages: %s", e)
+        return self._fallback_repo.get_research_messages(session_id, limit)
+
+    def clear_research_messages(self, session_id: str) -> int:
+        if self._is_connected and self._engine:
+            try:
+                with self._engine.begin() as conn:
+                    res = conn.execute(
+                        text("DELETE FROM ai_research_messages WHERE session_id = :session_id"),
+                        {"session_id": session_id},
+                    )
+                    return res.rowcount or 0
+            except Exception as e:
+                logger.debug("Postgres error in clear_research_messages: %s", e)
+        return self._fallback_repo.clear_research_messages(session_id)
 
 
 _repository_instance: Optional[DatabaseRepositoryInterface] = None

@@ -192,10 +192,16 @@ class FinancialNormalizer:
         if clean in CANONICAL_METRIC_MAP:
             return CANONICAL_METRIC_MAP[clean]
 
-        # Substring matching against canonical dictionary
-        for key, canonical in CANONICAL_METRIC_MAP.items():
-            if key == clean or key in clean or clean in key:
-                return canonical
+        # Longest prefix match only. Substring matching is deliberately avoided:
+        # it previously mis-mapped sub-line items such as "Prepaid and Other
+        # Current Assets" to CURRENT_ASSETS.
+        matches = [
+            key for key in CANONICAL_METRIC_MAP
+            if clean == key or clean.startswith(key + " ")
+        ]
+        if matches:
+            best = max(matches, key=len)
+            return CANONICAL_METRIC_MAP[best]
 
         return None
 

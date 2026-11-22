@@ -392,6 +392,41 @@ export const api = {
     return await request(`/documents/${encodeURIComponent(documentId)}/red-flags`, { method: "GET" });
   },
 
+  async askResearch(sessionId, { question, document_ids = null, top_k = 6 }) {
+    const endpoint = sessionId
+      ? `/research/sessions/${encodeURIComponent(sessionId)}/query`
+      : "/research/query";
+    return await request(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ question, document_ids, top_k }),
+      timeout: 120000
+    });
+  },
+
+  async getResearchMessages(sessionId) {
+    return await request(`/research/sessions/${encodeURIComponent(sessionId)}/messages`, { method: "GET" });
+  },
+
+  async clearResearchMessages(sessionId) {
+    return await request(`/research/sessions/${encodeURIComponent(sessionId)}/messages`, { method: "DELETE" });
+  },
+
+  async compareCompanies({ document_ids, metrics = null }) {
+    return await request("/comparison", {
+      method: "POST",
+      body: JSON.stringify({ document_ids, metrics }),
+      timeout: 120000
+    });
+  },
+
+  async generateReport(documentId) {
+    return await request("/reports/generate", {
+      method: "POST",
+      body: JSON.stringify({ document_id: documentId }),
+      timeout: 120000
+    });
+  },
+
   async getWorkflowRunStatus(runId) {
     return await request(`/workflows/${encodeURIComponent(runId)}/status`, { method: "GET" });
   },

@@ -1,13 +1,18 @@
-"""ChromaDB Vector Store Adapter (Safe Migration Fallback)."""
+"""ChromaDB Vector Store Adapter (Safe Migration Fallback).
+
+``chromadb`` is imported lazily so the backend and its test suite still start on
+machines where the optional native dependency is unavailable. In that case the
+adapter transparently delegates to :class:`LocalJSONVectorStore`, a persistent
+cosine-similarity index with no third-party requirements.
+"""
 
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import chromadb
-
 from app.config import get_settings
 from app.infrastructure.vector_store.base import VectorStoreInterface
+from app.infrastructure.vector_store.fallback import LocalJSONVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +30,39 @@ class ChromaVectorStore(VectorStoreInterface):
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name or settings.chroma_collection
 
+        self.client = None
+        self.collection = None
+        self._fallback: Optional[LocalJSONVectorStore] = None
+
+        try:
+            import chromadb
+        except ImportError:
+            logger.warning(
+                "ChromaDB is not installed; using the dependency-free local JSON "
+                "vector index at %s. Install 'chromadb' (or configure Qdrant) for "
+                "an HNSW-backed index.",
+                self.persist_dir,
+            )
+            self._fallback = LocalJSONVectorStore(
+                persist_dir=str(self.persist_dir),
+                collection_name=self.collection_name,
+            )
+            return
+
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
+    @property
+    def backend(self) -> str:
+        """Name of the active retrieval backend (useful for health/diagnostics)."""
+        return LocalJSONVectorStore.__name__ if self._fallback else "ChromaDB"
+
     def is_healthy(self) -> bool:
+        if self._fallback is not None:
+            return self._fallback.is_healthy()
         try:
             return self.collection is not None
         except Exception:
@@ -42,6 +73,9 @@ class ChromaVectorStore(VectorStoreInterface):
         chunks: List[Dict[str, Any]],
         embeddings: List[List[float]],
     ) -> int:
+        if self._fallback is not None:
+            return self._fallback.upsert_chunks(chunks, embeddings)
+
         if len(chunks) != len(embeddings):
             raise ValueError("Each chunk must have exactly one embedding.")
         if not chunks:
@@ -79,6 +113,11 @@ class ChromaVectorStore(VectorStoreInterface):
         top_k: int = 5,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        if self._fallback is not None:
+            return self._fallback.search_chunks(
+                query_embedding, top_k=top_k, filters=filters
+            )
+
         total = self.collection.count()
         if total == 0:
             return []
@@ -117,10 +156,14 @@ class ChromaVectorStore(VectorStoreInterface):
         return matches
 
     def count_chunks(self) -> int:
+        if self._fallback is not None:
+            return self._fallback.count_chunks()
         return self.collection.count()
 
     def get_chunks_by_document(self, document_id: str) -> List[Dict[str, Any]]:
         """Retrieve all chunks belonging to a document directly."""
+        if self._fallback is not None:
+            return self._fallback.get_chunks_by_document(document_id)
         try:
             total = self.collection.count()
             if total == 0:
